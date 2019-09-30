@@ -29,6 +29,7 @@ from object_detection.predictors.heads import keras_box_head
 from object_detection.predictors.heads import keras_class_head
 from object_detection.predictors.heads import keras_mask_head
 from object_detection.predictors.heads import mask_head
+from object_detection.predictors.heads import keypoint_head
 from object_detection.protos import box_predictor_pb2
 
 
@@ -542,7 +543,14 @@ def build_mask_rcnn_box_predictor(is_training,
                                   mask_prediction_num_conv_layers=2,
                                   mask_prediction_conv_depth=256,
                                   masks_are_class_agnostic=False,
-                                  convolve_then_upsample_masks=False):
+                                  convolve_then_upsample_masks=False
+                                  predict_keypoints=False,
+                                  num_keypoints=0,
+                                  keypoint_conv_hyperparams_fn=None,
+                                  keypoint_heatmap_height=56,
+                                  keypoint_heatmap_width=56,
+                                  keypoint_prediction_num_conv_layers=8,
+                                  keypoint_prediction_conv_depth=512):
   """Builds and returns a MaskRCNNBoxPredictor class.
 
   Args:
@@ -612,6 +620,16 @@ def build_mask_rcnn_box_predictor(is_training,
             mask_prediction_conv_depth=mask_prediction_conv_depth,
             masks_are_class_agnostic=masks_are_class_agnostic,
             convolve_then_upsample=convolve_then_upsample_masks)
+  if predict_keypoints:
+    third_stage_heads[
+        mask_rcnn_box_predictor.
+        KEYPOINTS_PREDICTIONS] = mask_head.MaskRCNNKeypointHead(
+            num_keypoints=num_keypoints,
+            conv_hyperparams_fn=keypoint_conv_hyperparams_fn,
+            keypoint_heatmap_height=keypoint_heatmap_height,
+            keypoint_heatmap_width=keypoint_heatmap_width,
+            keypoint_prediction_num_conv_layers=keypoint_prediction_num_conv_layers,
+            keypoint_prediction_conv_depth=keypoint_prediction_conv_depth)
   return mask_rcnn_box_predictor.MaskRCNNBoxPredictor(
       is_training=is_training,
       num_classes=num_classes,
