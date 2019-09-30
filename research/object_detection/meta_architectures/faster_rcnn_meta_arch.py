@@ -613,10 +613,14 @@ class FasterRCNNMetaArch(model.DetectionModel):
     self._second_stage_classification_loss = second_stage_classification_loss
     self._second_stage_mask_loss = (
         losses.WeightedSigmoidClassificationLoss())
+    self._second_stage_keypoints_loss = (
+        losses.WeightedSoftmaxClassificationLoss())
     self._second_stage_loc_loss_weight = second_stage_localization_loss_weight
     self._second_stage_cls_loss_weight = second_stage_classification_loss_weight
     self._second_stage_mask_loss_weight = (
         second_stage_mask_prediction_loss_weight)
+    self._second_stage_keypoints_loss_weight = (
+        second_stage_keypoints_prediction_loss_weight)
     self._hard_example_miner = hard_example_miner
     self._parallel_iterations = parallel_iterations
 
@@ -1136,6 +1140,9 @@ class FasterRCNNMetaArch(model.DetectionModel):
         1) mask_predictions: a 4-D tensor with shape
           [batch_size, max_detection, mask_height, mask_width] containing
           instance mask predictions.
+        2) keypoints_predictions: a 4-D tensor with shape
+          [batch_size, num_keypoints, heatmap_height, heatmap_width] containing
+          instance mask predictions.
     """
     if self._is_training:
       curr_box_classifier_features = prediction_dict['box_classifier_features']
@@ -1152,6 +1159,8 @@ class FasterRCNNMetaArch(model.DetectionModel):
             prediction_stage=3)
       prediction_dict['mask_predictions'] = tf.squeeze(mask_predictions[
           box_predictor.MASK_PREDICTIONS], axis=1)
+      prediction_dict['keypoints_predictions'] = tf.squeeze(mask_predictions[
+          box_predictor.KEYPOINTS_PREDICTIONS], axis=1)
     else:
       detections_dict = self._postprocess_box_classifier(
           prediction_dict['refined_box_encodings'],
@@ -1199,6 +1208,20 @@ class FasterRCNNMetaArch(model.DetectionModel):
       detection_masks = tf.cast(detection_masks, tf.float32)
       prediction_dict[fields.DetectionResultFields.detection_masks] = (
           tf.reshape(tf.sigmoid(detection_masks),
+                     [batch_size, max_detection, mask_height, mask_width]))
+      
+      detection_keypoints = tf.squeeze(mask_predictions[
+          box_predictor.KEYPOINTS_PREDICTIONS], axis=1)
+      _, num_keypoints, keypoint_heatmap_height, keypoint_heatmap_width = (
+          detection_keypoints.get_shape().as_list())
+      prediction_dict['keypoints_predictions'] = detection_keypoints
+      if num_classes > 1:
+        detection_masks = self._gather_instance_masks(
+            detection_masks, detection_classes)
+
+      detection_masks = tf.cast(detection_masks, tf.float32)
+      prediction_dict[fields.DetectionResultFields.detection_keypoints] = (
+          tf.reshape(tf.sigmoid(detection_keypoints),
                      [batch_size, max_detection, mask_height, mask_width]))
 
     return prediction_dict
