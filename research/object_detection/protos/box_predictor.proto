@@ -128,7 +128,7 @@ message WeightSharedConvolutionalBoxPredictor {
 
 // TODO(alirezafathi): Refactor the proto file to be able to configure mask rcnn
 // head easily.
-// Next id: 15
+// Next id: 20
 message MaskRCNNBoxPredictor {
   // Hyperparameters for fully connected ops used in the box predictor.
   optional Hyperparams fc_hyperparams = 1;
@@ -175,6 +175,23 @@ message MaskRCNNBoxPredictor {
   // By default, mask features are resized to [`mask_height`, `mask_width`]
   // before applying convolutions and predicting masks.
   optional bool convolve_then_upsample_masks = 14 [default = false];
+  
+  // Number of keypoints
+  optional int32 num_keypoints = 15 [default = 0];
+
+  // The depth for the first conv2d_transpose op applied to the
+  // image_features in the mask prediction branch. If set to 0, the value
+  // will be set automatically based on the number of channels in the image
+  // features and the number of classes.
+  optional int32 keypoint_prediction_conv_depth = 16 [default = 512];
+
+  // The height and the width of the predicted mask.
+  optional int32 keypoint_heatmap_height = 17 [default = 56];
+  optional int32 keypoint_heatmap_width = 18 [default = 56];
+
+  // The number of convolutions applied to image_features in the mask prediction
+  // branch.
+  optional int32 keypoint_prediction_num_conv_layers = 19 [default = 8];
 }
 
 message RfcnBoxPredictor {
