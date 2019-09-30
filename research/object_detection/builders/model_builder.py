@@ -528,6 +528,8 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
       frcnn_config.second_stage_classification_loss_weight)
   second_stage_mask_prediction_loss_weight = (
       frcnn_config.second_stage_mask_prediction_loss_weight)
+  second_stage_keypoints_prediction_loss_weight = (
+      frcnn_config.second_stage_keypoints_prediction_loss_weight)
 
   hard_example_miner = None
   if frcnn_config.HasField('hard_example_miner'):
