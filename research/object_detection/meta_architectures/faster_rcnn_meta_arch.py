@@ -326,7 +326,9 @@ class FasterRCNNMetaArch(model.DetectionModel):
                clip_anchors_to_image=False,
                use_static_shapes=False,
                resize_masks=True,
-               freeze_batchnorm=False):
+               freeze_batchnorm=False,
+               num_keypoints=0,
+               second_stage_keypoints_prediction_loss_weight=1.0):
     """FasterRCNNMetaArch Constructor.
 
     Args:
