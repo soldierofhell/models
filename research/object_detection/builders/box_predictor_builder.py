@@ -546,7 +546,6 @@ def build_mask_rcnn_box_predictor(is_training,
                                   convolve_then_upsample_masks=False
                                   predict_keypoints=False,
                                   num_keypoints=0,
-                                  keypoint_conv_hyperparams_fn=None,
                                   keypoint_heatmap_height=56,
                                   keypoint_heatmap_width=56,
                                   keypoint_prediction_num_conv_layers=8,
@@ -625,7 +624,7 @@ def build_mask_rcnn_box_predictor(is_training,
         mask_rcnn_box_predictor.
         KEYPOINTS_PREDICTIONS] = mask_head.MaskRCNNKeypointHead(
             num_keypoints=num_keypoints,
-            conv_hyperparams_fn=keypoint_conv_hyperparams_fn,
+            conv_hyperparams_fn=conv_hyperparams_fn,
             keypoint_heatmap_height=keypoint_heatmap_height,
             keypoint_heatmap_width=keypoint_heatmap_width,
             keypoint_prediction_num_conv_layers=keypoint_prediction_num_conv_layers,
@@ -796,7 +795,15 @@ def build(argscope_fn, box_predictor_config, is_training, num_classes,
         masks_are_class_agnostic=(
             config_box_predictor.masks_are_class_agnostic),
         convolve_then_upsample_masks=(
-            config_box_predictor.convolve_then_upsample_masks))
+            config_box_predictor.convolve_then_upsample_masks),
+        predict_keypoints=config_box_predictor.predict_keypoints,
+        num_keypoints=config_box_predictor.num_keypoints,
+        keypoint_heatmap_height=config_box_predictor.keypoint_heatmap_height,
+        keypoint_heatmap_width=config_box_predictor.keypoint_heatmap_width,
+        keypoint_prediction_num_conv_layers=(
+            config_box_predictor.keypoint_prediction_num_conv_layers),
+        keypoint_prediction_conv_depth=(
+            config_box_predictor.keypoint_prediction_conv_depth))
 
   if box_predictor_oneof == 'rfcn_box_predictor':
     config_box_predictor = box_predictor_config.rfcn_box_predictor
