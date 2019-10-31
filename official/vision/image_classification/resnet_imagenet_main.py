@@ -67,6 +67,10 @@ def run(flags_obj):
     tf.compat.v2.keras.mixed_precision.experimental.set_policy(policy)
     if not keras_utils.is_v2_0():
       raise ValueError('--dtype=fp16 is not supported in TensorFlow 1.')
+  elif dtype == tf.bfloat16:
+    policy = tf.compat.v2.keras.mixed_precision.experimental.Policy(
+        'mixed_bfloat16')
+    tf.compat.v2.keras.mixed_precision.experimental.set_policy(policy)
 
   data_format = flags_obj.data_format
   if data_format is None:
@@ -83,7 +87,8 @@ def run(flags_obj):
       num_gpus=flags_obj.num_gpus,
       num_workers=num_workers,
       all_reduce_alg=flags_obj.all_reduce_alg,
-      num_packs=flags_obj.num_packs)
+      num_packs=flags_obj.num_packs,
+      tpu_address=flags_obj.tpu)
 
   if strategy:
     # flags_obj.enable_get_next_as_optional controls whether enabling
@@ -123,6 +128,7 @@ def run(flags_obj):
       dtype=dtype,
       drop_remainder=drop_remainder,
       tf_data_experimental_slack=flags_obj.tf_data_experimental_slack,
+      training_dataset_cache=flags_obj.training_dataset_cache,
   )
 
   eval_input_dataset = None
@@ -193,7 +199,8 @@ def run(flags_obj):
       imagenet_preprocessing.NUM_IMAGES['train'] // flags_obj.batch_size)
   train_epochs = flags_obj.train_epochs
 
-  if flags_obj.train_steps:
+  # if mutliple epochs, ignore the train_steps flag.
+  if train_epochs <= 1 and flags_obj.train_steps:
     train_steps = min(flags_obj.train_steps, train_steps)
     train_epochs = 1
 
@@ -227,9 +234,12 @@ def run(flags_obj):
                       validation_freq=flags_obj.epochs_between_evals,
                       verbose=2)
   if flags_obj.enable_checkpoint_and_export:
-    # Keras model.save assumes a float32 input designature.
-    export_path = os.path.join(flags_obj.model_dir, 'saved_model')
-    model.save(export_path, include_optimizer=False)
+    if dtype == tf.bfloat16:
+      logging.warning("Keras model.save does not support bfloat16 dtype.")
+    else:
+      # Keras model.save assumes a float32 input designature.
+      export_path = os.path.join(flags_obj.model_dir, 'saved_model')
+      model.save(export_path, include_optimizer=False)
 
   eval_output = None
   if not flags_obj.skip_eval:
@@ -246,7 +256,7 @@ def run(flags_obj):
 
 def define_imagenet_keras_flags():
   common.define_keras_flags()
-  flags_core.set_defaults(train_epochs=90)
+  flags_core.set_defaults()
   flags.adopt_module_key_flags(common)
 
 

@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import copy
 import tensorflow as tf
+import tensorflow_hub as hub
 
 from official.modeling import tf_utils
 from official.nlp import bert_modeling as modeling
@@ -115,10 +116,11 @@ class BertPretrainLayer(tf.keras.layers.Layer):
   def __call__(self,
                pooled_output,
                sequence_output=None,
-               masked_lm_positions=None):
+               masked_lm_positions=None,
+               **kwargs):
     inputs = tf_utils.pack_inputs(
         [pooled_output, sequence_output, masked_lm_positions])
-    return super(BertPretrainLayer, self).__call__(inputs)
+    return super(BertPretrainLayer, self).__call__(inputs, **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
@@ -127,8 +129,7 @@ class BertPretrainLayer(tf.keras.layers.Layer):
     sequence_output = unpacked_inputs[1]
     masked_lm_positions = unpacked_inputs[2]
 
-    mask_lm_input_tensor = gather_indexes(
-        sequence_output, masked_lm_positions)
+    mask_lm_input_tensor = gather_indexes(sequence_output, masked_lm_positions)
     lm_output = self.lm_dense(mask_lm_input_tensor)
     lm_output = self.lm_layer_norm(lm_output)
     lm_output = tf.matmul(lm_output, self.embedding_table, transpose_b=True)
@@ -153,12 +154,14 @@ class BertPretrainLossAndMetricLayer(tf.keras.layers.Layer):
                sentence_output=None,
                lm_label_ids=None,
                lm_label_weights=None,
-               sentence_labels=None):
+               sentence_labels=None,
+               **kwargs):
     inputs = tf_utils.pack_inputs([
         lm_output, sentence_output, lm_label_ids, lm_label_weights,
         sentence_labels
     ])
-    return super(BertPretrainLossAndMetricLayer, self).__call__(inputs)
+    return super(BertPretrainLossAndMetricLayer, self).__call__(
+        inputs, **kwargs)
 
   def _add_metrics(self, lm_output, lm_labels, lm_label_weights,
                    lm_per_example_loss, sentence_output, sentence_labels,
@@ -324,7 +327,11 @@ class BertSquadLogitsLayer(tf.keras.layers.Layer):
     return unstacked_logits[0], unstacked_logits[1]
 
 
-def squad_model(bert_config, max_seq_length, float_type, initializer=None):
+def squad_model(bert_config,
+                max_seq_length,
+                float_type,
+                initializer=None,
+                hub_module_url=None):
   """Returns BERT Squad model along with core BERT model to import weights.
 
   Args:
@@ -332,6 +339,7 @@ def squad_model(bert_config, max_seq_length, float_type, initializer=None):
     max_seq_length: integer, the maximum input sequence length.
     float_type: tf.dtype, tf.float32 or tf.bfloat16.
     initializer: Initializer for weights in BertSquadLogitsLayer.
+    hub_module_url: TF-Hub path/url to Bert module.
 
   Returns:
     Two tensors, start logits and end logits, [batch x sequence length].
@@ -345,17 +353,26 @@ def squad_model(bert_config, max_seq_length, float_type, initializer=None):
   input_type_ids = tf.keras.layers.Input(
       shape=(max_seq_length,), dtype=tf.int32, name='segment_ids')
 
-  core_model = modeling.get_bert_model(
-      input_word_ids,
-      input_mask,
-      input_type_ids,
-      config=bert_config,
-      name='bert_model',
-      float_type=float_type)
-
-  # `BertSquadModel` only uses the sequnce_output which
-  # has dimensionality (batch_size, sequence_length, num_hidden).
-  sequence_output = core_model.outputs[1]
+  if hub_module_url:
+    core_model = hub.KerasLayer(
+        hub_module_url,
+        trainable=True)
+    _, sequence_output = core_model(
+        [input_word_ids, input_mask, input_type_ids])
+    # Sets the shape manually due to a bug in TF shape inference.
+    # TODO(hongkuny): remove this once shape inference is correct.
+    sequence_output.set_shape((None, max_seq_length, bert_config.hidden_size))
+  else:
+    core_model = modeling.get_bert_model(
+        input_word_ids,
+        input_mask,
+        input_type_ids,
+        config=bert_config,
+        name='bert_model',
+        float_type=float_type)
+    # `BertSquadModel` only uses the sequnce_output which
+    # has dimensionality (batch_size, sequence_length, num_hidden).
+    sequence_output = core_model.outputs[1]
 
   if initializer is None:
     initializer = tf.keras.initializers.TruncatedNormal(
@@ -380,7 +397,8 @@ def classifier_model(bert_config,
                      float_type,
                      num_labels,
                      max_seq_length,
-                     final_layer_initializer=None):
+                     final_layer_initializer=None,
+                     hub_module_url=None):
   """BERT classifier model in functional API style.
 
   Construct a Keras model for predicting `num_labels` outputs from an input with
@@ -393,6 +411,7 @@ def classifier_model(bert_config,
     max_seq_length: integer, the maximum input sequence length.
     final_layer_initializer: Initializer for final dense layer. Defaulted
       TruncatedNormal initializer.
+    hub_module_url: TF-Hub path/url to Bert module.
 
   Returns:
     Combined prediction model (words, mask, type) -> (one-hot labels)
@@ -404,13 +423,18 @@ def classifier_model(bert_config,
       shape=(max_seq_length,), dtype=tf.int32, name='input_mask')
   input_type_ids = tf.keras.layers.Input(
       shape=(max_seq_length,), dtype=tf.int32, name='input_type_ids')
-  bert_model = modeling.get_bert_model(
-      input_word_ids,
-      input_mask,
-      input_type_ids,
-      config=bert_config,
-      float_type=float_type)
-  pooled_output = bert_model.outputs[0]
+  if hub_module_url:
+    bert_model = hub.KerasLayer(hub_module_url, trainable=True)
+    pooled_output, _ = bert_model([input_word_ids, input_mask, input_type_ids])
+  else:
+    bert_model = modeling.get_bert_model(
+        input_word_ids,
+        input_mask,
+        input_type_ids,
+        config=bert_config,
+        float_type=float_type)
+    pooled_output = bert_model.outputs[0]
+
   if final_layer_initializer is not None:
     initializer = final_layer_initializer
   else:

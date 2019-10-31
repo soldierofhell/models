@@ -90,7 +90,6 @@ class XLNetClassifyAccuracy(XLNetClassifyBenchmarkBase):
 
   def _setup(self):
     super(XLNetClassifyAccuracy, self)._setup()
-    FLAGS.train_data_size = 25000
     FLAGS.test_data_size = 25024
     FLAGS.train_batch_size = 16
     FLAGS.seq_len = 512
@@ -122,7 +121,8 @@ class XLNetClassifyAccuracy(XLNetClassifyBenchmarkBase):
     # Sets timer_callback to None as we do not use it now.
     self.timer_callback = None
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
 

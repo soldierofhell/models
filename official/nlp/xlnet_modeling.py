@@ -23,6 +23,7 @@ import copy
 import numpy as np
 
 import tensorflow as tf
+from official.nlp.xlnet import data_utils
 
 
 def gelu(x):
@@ -96,19 +97,6 @@ def _cache_mem(curr_out, prev_mem, mem_len, reuse_len=None):
   return tf.keras.backend.stop_gradient(new_mem)
 
 
-def embedding_lookup(lookup_table, x, use_tpu=True):
-  """Looks up words embeddings for input id tensor."""
-  if use_tpu:
-    n_token = tf.shape(lookup_table)[0]
-    one_hot_idx = tf.one_hot(x, n_token)
-    if one_hot_idx.shape.ndims == 2:
-      return tf.einsum('nd,in->id', lookup_table, one_hot_idx)
-    else:
-      return tf.einsum('nd,ibn->ibd', lookup_table, one_hot_idx)
-  else:
-    return tf.nn.embedding_lookup(lookup_table, x)
-
-
 def is_special_none_tensor(tensor):
   """Checks if a tensor is a special None Tensor."""
   return tensor.shape.ndims == 0 and tensor.dtype == tf.int32
@@ -169,14 +157,12 @@ class PositionalEmbedding(tf.keras.layers.Layer):
 
   def build(self, unused_input_shapes):
     """Constructs inversed frequency vector for positional embedding layer."""
-    self.inv_freq = 1.0 / (10000.0 ** (tf.range(0, self.dim, 2.0) / self.dim))
+    self.inv_freq = 1.0 / (10000.0**(tf.range(0, self.dim, 2.0) / self.dim))
     super(PositionalEmbedding, self).build(unused_input_shapes)
 
-  def __call__(self, pos_seq, batch_size):
-    return super(PositionalEmbedding, self).__call__((
-        pos_seq,
-        batch_size,
-    ))
+  def __call__(self, pos_seq, batch_size, **kwargs):
+    return super(PositionalEmbedding, self).__call__(
+        (pos_seq, batch_size), **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
@@ -209,12 +195,12 @@ class RelativeAttention(tf.keras.layers.Layer):
     super(RelativeAttention, self).build(unused_input_shapes)
 
   def __call__(self, q_head, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat,
-               r_w_bias, r_r_bias, r_s_bias, attn_mask):
+               r_w_bias, r_r_bias, r_s_bias, attn_mask, **kwargs):
     inputs = pack_inputs([
         q_head, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat, r_w_bias,
         r_r_bias, r_s_bias, attn_mask
     ])
-    return super(RelativeAttention, self).__call__(inputs)
+    return super(RelativeAttention, self).__call__(inputs, **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
@@ -232,8 +218,12 @@ class RelativeAttention(tf.keras.layers.Layer):
     if seg_mat is None:
       ef = 0
     else:
-      ef = tf.einsum('ibnd,snd->ibns', q_head + r_s_bias, seg_embed)
-      ef = tf.einsum('ijbs,ibns->ijbn', seg_mat, ef)
+      ef = tf.einsum('ibnd,snd->isbn', q_head + r_s_bias, seg_embed)
+      tgt_shape = tf.shape(bd)
+      ef = tf.where(
+          tf.broadcast_to(tf.expand_dims(seg_mat, 3), tgt_shape),
+          tf.broadcast_to(ef[:, 1:, :, :], tgt_shape),
+          tf.broadcast_to(ef[:, :1, :, :], tgt_shape))
 
     # merges attention scores and performs masking
     attn_score = (ac + bd + ef) * self.scale
@@ -253,8 +243,8 @@ class RelativeAttention(tf.keras.layers.Layer):
 class PositionwiseFF(tf.keras.layers.Layer):
   """Positionwise feed-forward layer."""
 
-  def __init__(self, d_model, d_inner, dropout,
-               kernel_initializer, activation_type, **kwargs):
+  def __init__(self, d_model, d_inner, dropout, kernel_initializer,
+               activation_type, **kwargs):
     super(PositionwiseFF, self).__init__(**kwargs)
     self.d_model = d_model
     self.d_inner = d_inner
@@ -282,10 +272,8 @@ class PositionwiseFF(tf.keras.layers.Layer):
             units=self.d_model,
             kernel_initializer=self.kernel_initializer,
             name='layer_2'))
-    self.inner_dropout = tf.keras.layers.Dropout(rate=self.dropout,
-                                                 name='drop_1')
-    self.output_dropout = tf.keras.layers.Dropout(rate=self.dropout,
-                                                  name='drop_2')
+    self.output_dropout = tf.keras.layers.Dropout(
+        rate=self.dropout, name='drop_2')
     self.output_layer_norm = (
         tf.keras.layers.LayerNormalization(
             name='LayerNorm', axis=-1, epsilon=1e-12))
@@ -295,7 +283,6 @@ class PositionwiseFF(tf.keras.layers.Layer):
     """Implements call() for the layer."""
 
     output = self.inner_projection_layer(inp)
-    output = self.inner_dropout(output)
     output = self.output_projection_layer(output)
     output = self.output_dropout(output)
     output = self.output_layer_norm(output + inp)
@@ -305,14 +292,11 @@ class PositionwiseFF(tf.keras.layers.Layer):
 class EmbeddingLookup(tf.keras.layers.Layer):
   """Looks up words embeddings for id tensor."""
 
-  def __init__(self,
-               n_token, d_embed, initializer,
-               use_one_hot=False, **kwargs):
+  def __init__(self, n_token, d_embed, initializer, **kwargs):
     super(EmbeddingLookup, self).__init__(**kwargs)
     self.n_token = n_token
     self.d_embed = d_embed
     self.initializer = initializer
-    self.use_one_hot = use_one_hot
 
   def build(self, unused_input_shapes):
     """Implements build() for the layer."""
@@ -325,155 +309,7 @@ class EmbeddingLookup(tf.keras.layers.Layer):
     super(EmbeddingLookup, self).build(unused_input_shapes)
 
   def call(self, inputs):
-    x = inputs
-
-    if self.use_one_hot:
-      one_hot_idx = tf.one_hot(x, self.n_token, dtype=self.dtype)
-      if one_hot_idx.shape.ndims == 2:
-        return tf.einsum('in,nd->id',
-                         one_hot_idx,
-                         self.lookup_table), self.lookup_table
-      else:
-        return tf.einsum('ibn,nd->ibd',
-                         one_hot_idx,
-                         self.lookup_table), self.lookup_table
-    else:
-      return tf.nn.embedding_lookup(self.lookup_table, x), self.lookup_table
-
-
-class TwoStreamRelativeAttention(tf.keras.layers.Layer):
-  """Two-stream attention layer with relative positional encoding."""
-
-  def __init__(self, d_model, n_head, d_head, dropout, dropout_att,
-               kernel_initializer, **kwargs):
-    super(TwoStreamRelativeAttention, self).__init__(**kwargs)
-    self.d_model = d_model
-    self.n_head = n_head
-    self.d_head = d_head
-    self.dropout = dropout
-    self.dropout_att = dropout_att
-    self.initializer = kernel_initializer
-
-  def build(self, unused_input_shapes):
-    """Implements build() for the layer."""
-    self.scale = 1.0 / (self.d_head ** 0.5)
-    self.attention_projection_layer = tf.keras.layers.Dense(
-        units=self.d_model, use_bias=False,
-        kernel_initializer=self.initializer,
-        name='o')
-    self.attention_probs_dropout = tf.keras.layers.Dropout(
-        rate=self.dropout_att)
-    self.attention_out_dropout = tf.keras.layers.Dropout(rate=self.dropout)
-    self.output_layer_norm = tf.keras.layers.LayerNormalization(
-        name='LayerNorm', axis=-1, epsilon=1e-12)
-
-    self.kh_projection_layer = (
-        self.add_weight(
-            'k/kernel',
-            shape=[self.d_model, self.n_head, self.d_head],
-            initializer=self.initializer))
-    self.vh_projection_layer = (
-        self.add_weight(
-            'v/kernel',
-            shape=[self.d_model, self.n_head, self.d_head],
-            initializer=self.initializer))
-    self.kr_projection_layer = (
-        self.add_weight(
-            'r/kernel',
-            shape=[self.d_model, self.n_head, self.d_head],
-            initializer=self.initializer))
-    self.qh_projection_layer = (
-        self.add_weight(
-            'q/kernel',
-            shape=[self.d_model, self.n_head, self.d_head],
-            initializer=self.initializer))
-
-    self.h_attention_layer = RelativeAttention(
-        dropout_att=self.dropout_att, scale=self.scale)
-    self.g_attention_layer = RelativeAttention(
-        dropout_att=self.dropout_att, scale=self.scale)
-
-    self.proj_o = (
-        self.add_weight(
-            'o/kernel',
-            shape=[self.d_model, self.n_head, self.d_head],
-            initializer=self.initializer))
-
-    self.attention_dropout = tf.keras.layers.Dropout(rate=self.dropout)
-
-    super(TwoStreamRelativeAttention, self).build(unused_input_shapes)
-
-  def __call__(self, h, g, r, r_w_bias, r_r_bias,
-               seg_mat, r_s_bias, seg_embed, attn_mask_h, attn_mask_g,
-               mems, target_mapping):
-    inputs = pack_inputs([
-        h, g, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed, attn_mask_h,
-        attn_mask_g, mems, target_mapping
-    ])
-    return super(TwoStreamRelativeAttention, self).__call__(inputs)
-
-  def call(self, inputs):
-    """Implements call() for the layer."""
-    (h, g, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed, attn_mask_h,
-     attn_mask_g, mems, target_mapping) = unpack_inputs(inputs)
-
-    if mems is not None and mems.shape.ndims > 1:
-      cat = tf.concat([mems, h], 0)
-    else:
-      cat = h
-
-    # content heads
-
-    k_head_h = tf.einsum('ibh,hnd->ibnd', cat, self.kh_projection_layer)
-
-    v_head_h = tf.einsum('ibh,hnd->ibnd', cat, self.vh_projection_layer)
-
-    k_head_r = tf.einsum('ibh,hnd->ibnd', r, self.kr_projection_layer)
-
-    # positional heads
-
-    q_head_h = tf.einsum('ibh,hnd->ibnd', h, self.qh_projection_layer)
-
-    # core attention ops
-
-    attn_vec_h = self.h_attention_layer(q_head_h, k_head_h, v_head_h, k_head_r,
-                                        seg_embed, seg_mat, r_w_bias, r_r_bias,
-                                        r_s_bias, attn_mask_h)
-
-    output_h = tf.einsum('ibnd,hnd->ibh', attn_vec_h, self.proj_o)
-
-    output_h = self.attention_dropout(output_h)
-
-    output_h = self.output_layer_norm(output_h + h)
-
-    ##### g-stream
-    # query-stream query head
-    q_head_g = tf.einsum('ibh,hnd->ibnd', g, self.qh_projection_layer)
-
-    # core attention ops
-    if target_mapping is not None:
-
-      q_head_g = tf.einsum('mbnd,mlb->lbnd', q_head_g, target_mapping)
-
-      attn_vec_g = self.g_attention_layer(
-          q_head_g, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat, r_w_bias,
-          r_r_bias, r_s_bias, attn_mask_g)
-      attn_vec_g = tf.einsum('lbnd,mlb->mbnd', attn_vec_g, target_mapping)
-
-    else:
-      attn_vec_g = self.g_attention_layer(
-          q_head_g, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat, r_w_bias,
-          r_r_bias, r_s_bias, attn_mask_g)
-
-    # post processing
-
-    output_g = tf.einsum('ibnd,hnd->ibh', attn_vec_g, self.proj_o)
-
-    output_g = self.attention_dropout(output_g)
-
-    output_g = self.output_layer_norm(output_g + g)
-
-    return output_h, output_g
+    return tf.nn.embedding_lookup(self.lookup_table, inputs)
 
 
 class RelativeMultiheadAttention(tf.keras.layers.Layer):
@@ -491,7 +327,7 @@ class RelativeMultiheadAttention(tf.keras.layers.Layer):
 
   def build(self, unused_input_shapes):
     """Implements build() for the layer."""
-    self.scale = 1.0 / (self.d_head ** 0.5)
+    self.scale = 1.0 / (self.d_head**0.5)
 
     self.output_layer_norm = tf.keras.layers.LayerNormalization(
         name='LayerNorm', axis=-1, epsilon=1e-12)
@@ -513,7 +349,7 @@ class RelativeMultiheadAttention(tf.keras.layers.Layer):
         shape=[self.d_model, self.n_head, self.d_head],
         initializer=self.initializer)
 
-    self.h_attention_layer = RelativeAttention(
+    self.relative_attention_layer = RelativeAttention(
         dropout_att=self.dropout_att, scale=self.scale)
 
     self.proj_o = self.add_weight(
@@ -525,17 +361,18 @@ class RelativeMultiheadAttention(tf.keras.layers.Layer):
 
     super(RelativeMultiheadAttention, self).build(unused_input_shapes)
 
-  def __call__(self, h, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed,
-               attn_mask, mems):
+  def __call__(self, h, g, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed,
+               attn_mask_h, attn_mask_g, mems, target_mapping, **kwargs):
     inputs = pack_inputs([
-        h, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed, attn_mask, mems
+        h, g, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed, attn_mask_h,
+        attn_mask_g, mems, target_mapping,
     ])
-    return super(RelativeMultiheadAttention, self).__call__(inputs)
+    return super(RelativeMultiheadAttention, self).__call__(inputs, **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
-    (h, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed, attn_mask,
-     mems) = unpack_inputs(inputs)
+    (h, g, r, r_w_bias, r_r_bias, seg_mat, r_s_bias, seg_embed, attn_mask_h,
+     attn_mask_g, mems, target_mapping) = unpack_inputs(inputs)
 
     if mems is not None and mems.shape.ndims > 1:
       cat = tf.concat([mems, h], 0)
@@ -543,30 +380,45 @@ class RelativeMultiheadAttention(tf.keras.layers.Layer):
       cat = h
 
     # content heads
-
     q_head_h = tf.einsum('ibh,hnd->ibnd', h, self.qh_projection_layer)
-
     k_head_h = tf.einsum('ibh,hnd->ibnd', cat, self.kh_projection_layer)
-
     v_head_h = tf.einsum('ibh,hnd->ibnd', cat, self.vh_projection_layer)
 
     # positional heads
-
     k_head_r = tf.einsum('ibh,hnd->ibnd', r, self.kr_projection_layer)
 
     # core attention ops
-    attn_vec = self.h_attention_layer(
+    attn_vec_h = self.relative_attention_layer(
         q_head_h, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat, r_w_bias,
-        r_r_bias, r_s_bias, attn_mask)
+        r_r_bias, r_s_bias, attn_mask_h)
 
     # post processing
+    output_h = tf.einsum('ibnd,hnd->ibh', attn_vec_h, self.proj_o)
+    output_h = self.attention_dropout(output_h)
+    output_h = self.output_layer_norm(output_h + h)
 
-    output = tf.einsum('ibnd,hnd->ibh', attn_vec, self.proj_o)
+    output_g = None
+    if g is not None:  # enable two-stream attention
+      # g-stream
+      q_head_g = tf.einsum('ibh,hnd->ibnd', g, self.qh_projection_layer)
+      if target_mapping is not None:
+        q_head_g = tf.einsum('mbnd,mlb->lbnd', q_head_g, target_mapping)
+        attn_vec_g = self.relative_attention_layer(
+            q_head_g, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat,
+            r_w_bias, r_r_bias, r_s_bias, attn_mask_g)
+        attn_vec_g = tf.einsum('lbnd,mlb->mbnd', attn_vec_g, target_mapping)
 
-    output = self.attention_dropout(output)
+      else:
+        attn_vec_g = self.relative_attention_layer(
+            q_head_g, k_head_h, v_head_h, k_head_r, seg_embed, seg_mat,
+            r_w_bias, r_r_bias, r_s_bias, attn_mask_g)
 
-    output = self.output_layer_norm(output + h)
-    return output
+      # post processing
+      output_g = tf.einsum('ibnd,hnd->ibh', attn_vec_g, self.proj_o)
+      output_g = self.attention_dropout(output_g)
+      output_g = self.output_layer_norm(output_g + g)
+
+    return (output_h, output_g)
 
 
 class TransformerXLModel(tf.keras.layers.Layer):
@@ -592,7 +444,7 @@ class TransformerXLModel(tf.keras.layers.Layer):
                use_tpu=True,
                reuse_len=None,
                ff_activation='relu',
-               use_bfloat16=False,
+               use_cls_mask=False,
                **kwargs):
     """Initializes TransformerXLModel.
 
@@ -620,7 +472,7 @@ class TransformerXLModel(tf.keras.layers.Layer):
       reuse_len: int, the number of tokens in the currect batch to be cached and
         reused in the future.
       ff_activation: str, "relu" or "gelu".
-      use_bfloat16: bool, use bfloat16 instead of float32.
+      use_cls_mask: bool, whether to introduce cls mask.
       **kwargs: Other parameters.
     """
 
@@ -636,7 +488,6 @@ class TransformerXLModel(tf.keras.layers.Layer):
     self.d_inner = d_inner
     self.ff_activation = ff_activation
     self.untie_r = untie_r
-    self.use_bfloat16 = use_bfloat16
     self.use_tpu = use_tpu
     self.dropout = dropout
     self.dropout_att = dropout_att
@@ -646,21 +497,21 @@ class TransformerXLModel(tf.keras.layers.Layer):
     self.bi_data = bi_data
     self.clamp_len = clamp_len
     self.same_length = same_length
+    self.use_cls_mask = use_cls_mask
 
   def build(self, unused_input_shapes):
     """Implements build() for the layer."""
-    self.tf_float = tf.bfloat16 if self.use_bfloat16 else tf.float32
+    self.tf_float = tf.float32
 
-    self.embedding_lookup = EmbeddingLookup(n_token=self.n_token,
-                                            d_embed=self.d_model,
-                                            initializer=self.initializer,
-                                            use_one_hot=self.use_tpu,
-                                            dtype=self.tf_float,
-                                            name='word_embedding')
+    self.embedding_lookup = EmbeddingLookup(
+        n_token=self.n_token,
+        d_embed=self.d_model,
+        initializer=self.initializer,
+        dtype=self.tf_float,
+        name='word_embedding')
 
     self.h_dropout = tf.keras.layers.Dropout(rate=self.dropout)
     self.g_dropout = tf.keras.layers.Dropout(rate=self.dropout)
-    self.output_dropout = tf.keras.layers.Dropout(rate=self.dropout)
 
     if self.untie_r:
       self.r_w_bias = (
@@ -702,30 +553,19 @@ class TransformerXLModel(tf.keras.layers.Layer):
 
     self.seg_embed = self.add_weight(
         'seg_embed', [self.n_layer, 2, self.n_head, self.d_head],
-        dtype=self.tf_float, initializer=self.initializer)
+        dtype=self.tf_float,
+        initializer=self.initializer)
 
-    self.mask_emb = self.add_weight('mask_emb/mask_emb',
-                                    shape=[1, 1, self.d_model],
-                                    dtype=self.tf_float)
+    self.mask_emb = self.add_weight(
+        'mask_emb/mask_emb', shape=[1, 1, self.d_model], dtype=self.tf_float)
 
     self.emb_dropout = tf.keras.layers.Dropout(rate=self.dropout)
     self.fwd_position_embedding = PositionalEmbedding(self.d_model)
     self.bwd_position_embedding = PositionalEmbedding(self.d_model)
 
-    self.two_stream_layers = []
     self.rel_multihead_layers = []
-    self.g_positionwise_ffn_layers = []
     self.h_positionwise_ffn_layers = []
     for i in range(self.n_layer):
-      self.two_stream_layers.append(
-          TwoStreamRelativeAttention(
-              d_model=self.d_model,
-              dropout=self.dropout,
-              n_head=self.n_head,
-              d_head=self.d_head,
-              dropout_att=self.dropout_att,
-              kernel_initializer=self.initializer,
-              name='layer_%d/rel_attn' % (i)))
       self.rel_multihead_layers.append(
           RelativeMultiheadAttention(
               d_model=self.d_model,
@@ -735,22 +575,14 @@ class TransformerXLModel(tf.keras.layers.Layer):
               dropout_att=self.dropout_att,
               kernel_initializer=self.initializer,
               name='layer_%d/rel_attn' % (i)))
-      self.g_positionwise_ffn_layers.append(
-          PositionwiseFF(
-              d_model=self.d_model,
-              d_inner=self.d_inner,
-              dropout=self.dropout,
-              kernel_initializer=self.initializer,
-              activation_type=self.ff_activation, name='layer_%d/ff'%(i))
-          )
       self.h_positionwise_ffn_layers.append(
           PositionwiseFF(
               d_model=self.d_model,
               d_inner=self.d_inner,
               dropout=self.dropout,
               kernel_initializer=self.initializer,
-              activation_type=self.ff_activation, name='layer_%d/ff'%(i))
-          )
+              activation_type=self.ff_activation,
+              name='layer_%d/ff' % (i)))
 
     self.output_dropout = tf.keras.layers.Dropout(rate=self.dropout)
 
@@ -763,13 +595,20 @@ class TransformerXLModel(tf.keras.layers.Layer):
                mems=None,
                perm_mask=None,
                target_mapping=None,
-               inp_q=None):
+               inp_q=None,
+               **kwargs):
     # Uses dict to feed inputs into call() in order to keep mems as a python
     # list.
-    inputs = {'inp_k': inp_k, 'seg_id': seg_id, 'input_mask': input_mask,
-              'mems': mems, 'perm_mask': perm_mask,
-              'target_mapping': target_mapping, 'inp_q': inp_q}
-    return super(TransformerXLModel, self).__call__(inputs)
+    inputs = {
+        'inp_k': inp_k,
+        'seg_id': seg_id,
+        'input_mask': input_mask,
+        'mems': mems,
+        'perm_mask': perm_mask,
+        'target_mapping': target_mapping,
+        'inp_q': inp_q
+    }
+    return super(TransformerXLModel, self).__call__(inputs, **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
@@ -827,14 +666,14 @@ class TransformerXLModel(tf.keras.layers.Layer):
 
     if attn_mask is not None:
       non_tgt_mask = -tf.eye(qlen, dtype=self.tf_float)
-      non_tgt_mask = tf.concat([tf.zeros([qlen, mlen], dtype=self.tf_float),
-                                non_tgt_mask], axis=-1)
-      non_tgt_mask = tf.cast((attn_mask + non_tgt_mask[:, :, None, None]) > 0,
-                             dtype=self.tf_float)
+      non_tgt_mask = tf.concat(
+          [tf.zeros([qlen, mlen], dtype=self.tf_float), non_tgt_mask], axis=-1)
+      non_tgt_mask = tf.cast(
+          (attn_mask + non_tgt_mask[:, :, None, None]) > 0, dtype=self.tf_float)
     else:
       non_tgt_mask = None
 
-    word_emb_k, _ = self.embedding_lookup(inp_k)
+    word_emb_k = self.embedding_lookup(inp_k)
 
     if inp_q is not None:
       if target_mapping is not None:
@@ -845,6 +684,7 @@ class TransformerXLModel(tf.keras.layers.Layer):
         word_emb_q = inp_q_ext * self.mask_emb + (1 - inp_q_ext) * word_emb_k
 
     output_h = self.h_dropout(word_emb_k)
+    output_g = None
     if inp_q is not None:
       output_g = self.g_dropout(word_emb_q)
 
@@ -855,15 +695,18 @@ class TransformerXLModel(tf.keras.layers.Layer):
 
       mem_pad = tf.zeros([mlen, bsz], dtype=tf.int32)
 
-      cat_ids = tf.concat([mem_pad, seg_id], 0)
+      cat_id = tf.concat([mem_pad, seg_id], 0)
 
-      # `1` indicates not in the same segment [qlen x klen x bsz]
-      seg_mat = tf.cast(
-          tf.logical_not(tf.equal(seg_id[:, None], cat_ids[None, :])),
-          tf.int32)
-
-      seg_mat = tf.one_hot(seg_mat, 2, dtype=self.tf_float)
-
+      if self.use_cls_mask:
+        # `1` indicates not in the same segment [qlen x klen x bsz]
+        # seg_id: [qlen x bsz] & cat_id: [klen x bsz]
+        cls_mat = tf.logical_or(
+            tf.equal(seg_id, tf.constant([data_utils.SEG_ID_CLS]))[:, None],
+            tf.equal(cat_id, tf.constant([data_utils.SEG_ID_CLS]))[None, :])
+        seg_mat = tf.equal(seg_id[:, None], cat_id[None, :])
+        seg_mat = tf.logical_or(cls_mat, seg_mat)
+      else:
+        seg_mat = tf.logical_not(tf.equal(seg_id[:, None], cat_id[None, :]))
     else:
       seg_mat = None
 
@@ -894,8 +737,8 @@ class TransformerXLModel(tf.keras.layers.Layer):
                                        self.clamp_len)
 
       if bsz is not None:
-        fwd_pos_emb = self.fwd_position_embedding(fwd_pos_seq, bsz//2)
-        bwd_pos_emb = self.bwd_position_embedding(bwd_pos_seq, bsz//2)
+        fwd_pos_emb = self.fwd_position_embedding(fwd_pos_seq, bsz // 2)
+        bwd_pos_emb = self.bwd_position_embedding(bwd_pos_seq, bsz // 2)
       else:
         fwd_pos_emb = self.fwd_position_embedding(fwd_pos_seq, None)
         bwd_pos_emb = self.bwd_position_embedding(bwd_pos_seq, None)
@@ -906,8 +749,8 @@ class TransformerXLModel(tf.keras.layers.Layer):
       if dtype is not None and dtype != tf.float32:
         fwd_pos_seq = tf.cast(fwd_pos_seq, dtype=dtype)
       if self.clamp_len > 0:
-        fwd_pos_seq = tf.clip_by_value(fwd_pos_seq,
-                                       -self.clamp_len, self.lamp_len)
+        fwd_pos_seq = tf.clip_by_value(fwd_pos_seq, -self.clamp_len,
+                                       self.lamp_len)
 
       pos_emb = self.fwd_position_embedding(fwd_pos_seq, bsz)
 
@@ -929,49 +772,29 @@ class TransformerXLModel(tf.keras.layers.Layer):
         r_s_bias_i = self.r_s_bias if not self.untie_r else self.r_s_bias[i]
         seg_embed_i = self.seg_embed[i]
 
-      if inp_q is not None:
-        two_stream_layer = self.two_stream_layers[i]
-        g_ffn_layer = self.g_positionwise_ffn_layers[i]
-        h_ffn_layer = self.h_positionwise_ffn_layers[i]
-        rel_multihead_layer = self.rel_multihead_layers[i]
-
-        output_h, output_g = two_stream_layer(
-            h=output_h,
-            g=output_g,
-            r=pos_emb,
-            r_w_bias=self.r_w_bias if not self.untie_r else self.r_w_bias[i],
-            r_r_bias=self.r_r_bias if not self.untie_r else self.r_r_bias[i],
-            seg_mat=seg_mat,
-            r_s_bias=r_s_bias_i,
-            seg_embed=seg_embed_i,
-            attn_mask_h=non_tgt_mask,
-            attn_mask_g=attn_mask,
-            mems=mems[i],
-            target_mapping=target_mapping)
-
-        output_g = g_ffn_layer(output_g)
-
-        output_h = g_ffn_layer(output_h)
-      else:
-        rel_multihead_layer = self.rel_multihead_layers[i]
-        h_ffn_layer = self.h_positionwise_ffn_layers[i]
-        output_h = rel_multihead_layer(
-            h=output_h,
-            r=pos_emb,
-            r_w_bias=self.r_w_bias if not self.untie_r else self.r_w_bias[i],
-            r_r_bias=self.r_r_bias if not self.untie_r else self.r_r_bias[i],
-            seg_mat=seg_mat,
-            r_s_bias=r_s_bias_i,
-            seg_embed=seg_embed_i,
-            attn_mask=non_tgt_mask,
-            mems=mems[i])
-
-        output_h = h_ffn_layer(output_h)
+      ffn_layer = self.h_positionwise_ffn_layers[i]
+      attention_layer = self.rel_multihead_layers[i]
+      output_h, output_g = attention_layer(
+          h=output_h,
+          g=output_g,
+          r=pos_emb,
+          r_w_bias=self.r_w_bias if not self.untie_r else self.r_w_bias[i],
+          r_r_bias=self.r_r_bias if not self.untie_r else self.r_r_bias[i],
+          seg_mat=seg_mat,
+          r_s_bias=r_s_bias_i,
+          seg_embed=seg_embed_i,
+          attn_mask_h=non_tgt_mask,
+          attn_mask_g=attn_mask,
+          mems=mems[i],
+          target_mapping=target_mapping)
+      output_h = ffn_layer(output_h)
+      if output_g is not None:
+        output_g = ffn_layer(output_g)
 
     if inp_q is not None:
-      output = self.output_dropout(output_g)
+      output = output_g
     else:
-      output = self.output_dropout(output_h)
+      output = output_h
 
     return output, new_mems, None
 
@@ -983,7 +806,7 @@ class PretrainingXLNetModel(tf.keras.Model):
 
   """
 
-  def __init__(self, xlnet_config, run_config, **kwargs):
+  def __init__(self, use_proj, xlnet_config, run_config, **kwargs):
     super(PretrainingXLNetModel, self).__init__(**kwargs)
     self.run_config = run_config
     self.initializer = _get_initializer(run_config)
@@ -1001,7 +824,6 @@ class PretrainingXLNetModel(tf.keras.Model):
         ff_activation=self.xlnet_config.ff_activation,
         untie_r=self.xlnet_config.untie_r,
         is_training=self.run_config.is_training,
-        use_bfloat16=self.run_config.use_bfloat16,
         use_tpu=self.run_config.use_tpu,
         dropout=self.run_config.dropout,
         dropout_att=self.run_config.dropout_att,
@@ -1010,15 +832,17 @@ class PretrainingXLNetModel(tf.keras.Model):
         bi_data=self.run_config.bi_data,
         clamp_len=self.run_config.clamp_len,
         same_length=self.run_config.same_length,
+        use_cls_mask=self.run_config.use_cls_mask,
         name='transformer')
-    self.lmloss_layer = LMLossLayer(n_token=self.xlnet_config.n_token,
-                                    d_model=self.xlnet_config.d_model,
-                                    initializer=self.initializer,
-                                    use_bfloat16=self.run_config.use_bfloat16,
-                                    tie_weight=True,
-                                    bi_data=self.run_config.bi_data,
-                                    use_tpu=self.run_config.use_tpu,
-                                    name='lm_loss')
+    self.lmloss_layer = LMLossLayer(
+        n_token=self.xlnet_config.n_token,
+        d_model=self.xlnet_config.d_model,
+        initializer=self.initializer,
+        tie_weight=True,
+        bi_data=self.run_config.bi_data,
+        use_tpu=self.run_config.use_tpu,
+        use_proj=use_proj,
+        name='lm_loss')
 
   def call(self, features):
     """Implements call() for the layer."""
@@ -1064,7 +888,7 @@ class ClassificationXLNetModel(tf.keras.Model):
 
   """
 
-  def __init__(self, xlnet_config, run_config, n_class, **kwargs):
+  def __init__(self, xlnet_config, run_config, n_class, summary_type, **kwargs):
     super(ClassificationXLNetModel, self).__init__(**kwargs)
     self.run_config = run_config
     self.initializer = _get_initializer(run_config)
@@ -1082,7 +906,6 @@ class ClassificationXLNetModel(tf.keras.Model):
         ff_activation=self.xlnet_config.ff_activation,
         untie_r=self.xlnet_config.untie_r,
         is_training=self.run_config.is_training,
-        use_bfloat16=self.run_config.use_bfloat16,
         use_tpu=self.run_config.use_tpu,
         dropout=self.run_config.dropout,
         dropout_att=self.run_config.dropout_att,
@@ -1101,7 +924,7 @@ class ClassificationXLNetModel(tf.keras.Model):
         dropout_att=self.run_config.dropout_att,
         initializer=self.initializer,
         use_proj=True,
-        summary_type='last',
+        summary_type=summary_type,
         name='sequence_summary')
 
     self.cl_loss_layer = ClassificationLossLayer(
@@ -1123,9 +946,9 @@ class ClassificationXLNetModel(tf.keras.Model):
         self.transformerxl_model(
             inp_k=input_ids, seg_id=seg_ids, input_mask=input_mask, mems=mems))
 
-    self.summary = self.summarization_layer(transformerxl_output)
+    summary = self.summarization_layer(transformerxl_output)
     per_example_loss, logits = self.cl_loss_layer(
-        hidden=self.summary, labels=label)
+        hidden=summary, labels=label)
     self.add_loss(tf.keras.backend.mean(per_example_loss))
     return new_mems, logits
 
@@ -1133,23 +956,28 @@ class ClassificationXLNetModel(tf.keras.Model):
 class LMLossLayer(tf.keras.layers.Layer):
   """Layer computing cross entropy loss for language modeling."""
 
-  def __init__(self, n_token, d_model, initializer, use_bfloat16,
-               tie_weight=False, bi_data=True, use_tpu=False, **kwargs):
+  def __init__(self,
+               n_token,
+               d_model,
+               initializer,
+               tie_weight=False,
+               bi_data=True,
+               use_tpu=False,
+               use_proj=False,
+               **kwargs):
     """Constructs LMLoss layer.
 
     Args:
       n_token: Number of tokens in vocabulary.
       d_model: The dimension of model hidden state.
       initializer: Initializer used for parameters.
-      use_bfloat16: Whether to use bfloat16.
       tie_weight: Whether to share weights between embedding lookup layer and
-      next-token prediction layer.
-      bi_data: Whether to use bidirectional input pipeline.
-      Usually set to True during pretraining and False during finetuning.
+        next-token prediction layer.
+      bi_data: Whether to use bidirectional input pipeline. Usually set to True
+        during pretraining and False during finetuning.
       use_tpu: bool, whether to use TPU.
+      use_proj: bool, whether to add a projection layer before LM prediction.
       **kwargs: Other parameters.
-
-
     """
     super(LMLossLayer, self).__init__(**kwargs)
     self.n_token = n_token
@@ -1159,27 +987,38 @@ class LMLossLayer(tf.keras.layers.Layer):
     self.tie_weight = tie_weight
     self.bi_data = bi_data
     self.use_tpu = use_tpu
-    self.use_bfloat16 = use_bfloat16
+    self.use_proj = use_proj
 
   def build(self, unused_input_shapes):
     """Implements build() for the layer."""
+    if self.use_proj:
+      self.proj_layer = tf.keras.layers.Dense(
+          units=self.d_model,
+          kernel_initializer=self.initializer,
+          activation=gelu,
+          name='lm_projection/dense')
+      self.proj_layer_norm = tf.keras.layers.LayerNormalization(
+          axis=-1, epsilon=1e-12, name='lm_projection/LayerNorm')
     if not self.tie_weight:
-      self.softmax_w = self.add_weight('weight',
-                                       shape=[self.n_token, self.d_model],
-                                       initializer=self.initializer)
+      self.softmax_w = self.add_weight(
+          'weight',
+          shape=[self.n_token, self.d_model],
+          initializer=self.initializer)
 
-    self.softmax_b = self.add_weight('bias', shape=[self.n_token],
-                                     initializer=tf.zeros_initializer())
+    self.softmax_b = self.add_weight(
+        'bias', shape=[self.n_token], initializer=tf.zeros_initializer())
 
     super(LMLossLayer, self).build(unused_input_shapes)
 
-  def __call__(self, hidden, target, lookup_table, target_mask):
+  def __call__(self, hidden, target, lookup_table, target_mask, **kwargs):
     inputs = pack_inputs([hidden, target, lookup_table, target_mask])
-    return super(LMLossLayer, self).__call__(inputs)
+    return super(LMLossLayer, self).__call__(inputs, **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
     (hidden, target, lookup_table, tgt_mask) = unpack_inputs(inputs)
+    if self.use_proj:
+      hidden = self.proj_layer_norm(self.proj_layer(hidden))
     if self.tie_weight:
       logits = tf.einsum('ibd,nd->ibn', hidden, lookup_table) + self.softmax_b
     else:
@@ -1189,11 +1028,8 @@ class LMLossLayer(tf.keras.layers.Layer):
       one_hot_target = tf.one_hot(target, self.n_token, dtype=logits.dtype)
       loss = -tf.reduce_sum(tf.nn.log_softmax(logits) * one_hot_target, -1)
     else:
-      loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=target,
-                                                            logits=logits)
-    if self.use_bfloat16:
-      tgt_mask = tf.cast(tgt_mask, tf.float32)
-      loss = tf.cast(loss, tf.float32)
+      loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+          labels=target, logits=logits)
 
     total_loss = tf.reduce_sum(loss * tgt_mask) / tf.reduce_sum(tgt_mask)
 
@@ -1251,7 +1087,12 @@ class Summarization(tf.keras.layers.Layer):
 
   def call(self, inputs):
     """Implements call() for the layer."""
-    summary = inputs[-1]
+    if self.summary_type == 'last':
+      summary = inputs[-1]
+    elif self.summary_type == 'first':
+      summary = inputs[0]
+    else:
+      raise ValueError('Invalid summary type provided: %s' % self.summary_type)
     summary = self.proj_layer(summary)
     summary = self.dropout_layer(summary)
     return summary
@@ -1280,9 +1121,9 @@ class ClassificationLossLayer(tf.keras.layers.Layer):
 
     super(ClassificationLossLayer, self).build(unused_input_shapes)
 
-  def __call__(self, hidden, labels):
+  def __call__(self, hidden, labels, **kwargs):
     inputs = pack_inputs([hidden, labels])
-    return super(ClassificationLossLayer, self).__call__(inputs)
+    return super(ClassificationLossLayer, self).__call__(inputs, **kwargs)
 
   def call(self, inputs):
     """Implements call() for the layer."""
@@ -1321,7 +1162,6 @@ class QAXLNetModel(tf.keras.Model):
         ff_activation=self.xlnet_config.ff_activation,
         untie_r=self.xlnet_config.untie_r,
         is_training=self.run_config.is_training,
-        use_bfloat16=self.run_config.use_bfloat16,
         use_tpu=self.run_config.use_tpu,
         dropout=self.run_config.dropout,
         dropout_att=self.run_config.dropout_att,
@@ -1370,8 +1210,7 @@ class QAXLNetModel(tf.keras.Model):
 
 
 class QALossLayer(tf.keras.layers.Layer):
-  """Layer computing position and regression loss for question answering task.
-  """
+  """Layer computing position and regression loss for question answering task."""
 
   def __init__(self, d_model, start_n_top, end_n_top, initializer, dropout,
                **kwargs):
