@@ -42,6 +42,7 @@ CLASSIFIER_INPUT_META_DATA_PATH = 'gs://tf-perfzero-data/bert/classification/mrp
 MODEL_CONFIG_FILE_PATH = 'gs://cloud-tpu-checkpoints/bert/tf_20/uncased_L-24_H-1024_A-16/bert_config'
 # pylint: enable=line-too-long
 
+TMP_DIR = os.getenv('TMPDIR')
 FLAGS = flags.FLAGS
 
 
@@ -75,7 +76,7 @@ class BertClassifyBenchmarkBase(benchmark_utils.BertBenchmarkBase):
 
     steps_per_loop = 1
 
-    run_classifier.run_customized_training(
+    run_classifier.run_bert_classifier(
         strategy,
         bert_config,
         input_meta_data,
@@ -98,7 +99,7 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
   `benchmark_(number of gpus)_gpu_(dataset type)` format.
   """
 
-  def __init__(self, output_dir=None, **kwargs):
+  def __init__(self, output_dir=TMP_DIR, **kwargs):
     super(BertClassifyBenchmarkReal, self).__init__(output_dir=output_dir)
 
     self.train_data_path = CLASSIFIER_TRAIN_DATA_PATH
@@ -147,7 +148,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.train_batch_size = 4
     FLAGS.eval_batch_size = 4
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
   def benchmark_1_gpu_mrpc_xla(self):
@@ -164,7 +166,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.eval_batch_size = 4
     FLAGS.enable_xla = True
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
   def benchmark_1_gpu_mrpc_no_dist_strat(self):
@@ -180,7 +183,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.train_batch_size = 4
     FLAGS.eval_batch_size = 4
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path, use_ds=False)
 
   def benchmark_2_gpu_mrpc(self):
@@ -196,7 +200,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.train_batch_size = 8
     FLAGS.eval_batch_size = 8
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
   def benchmark_4_gpu_mrpc(self):
@@ -211,7 +216,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.bert_config_file = self.bert_config_file
     FLAGS.train_batch_size = 16
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
   def benchmark_8_gpu_mrpc(self):
@@ -224,7 +230,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.input_meta_data_path = self.input_meta_data_path
     FLAGS.bert_config_file = self.bert_config_file
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
   def benchmark_1_gpu_amp_mrpc_no_dist_strat(self):
@@ -242,7 +249,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.dtype = 'fp16'
     FLAGS.fp16_implementation = 'graph_rewrite'
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path, use_ds=False)
 
   def benchmark_8_gpu_amp_mrpc(self):
@@ -261,7 +269,8 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     FLAGS.dtype = 'fp16'
     FLAGS.fp16_implementation = 'graph_rewrite'
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path, use_ds=False)
 
 
@@ -273,7 +282,7 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
   `benchmark_(number of gpus)_gpu_(dataset type)` format.
   """
 
-  def __init__(self, output_dir=None, **kwargs):
+  def __init__(self, output_dir=TMP_DIR, **kwargs):
     self.train_data_path = CLASSIFIER_TRAIN_DATA_PATH
     self.eval_data_path = CLASSIFIER_EVAL_DATA_PATH
     self.bert_config_file = MODEL_CONFIG_FILE_PATH
@@ -319,7 +328,8 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
     self._setup()
     FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_mrpc')
 
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
   def benchmark_8_gpu_mrpc_xla(self):
@@ -327,7 +337,8 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
     self._setup()
     FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_mrpc_xla')
     FLAGS.enable_xla = True
-    summary_path = os.path.join(FLAGS.model_dir, 'training_summary.txt')
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)
 
 

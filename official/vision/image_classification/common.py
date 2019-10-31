@@ -298,7 +298,8 @@ def define_keras_flags(dynamic_loss_scale=True):
                                 fp16_implementation=True,
                                 tf_data_experimental_slack=True,
                                 enable_xla=True,
-                                force_v2_in_keras_compile=True)
+                                force_v2_in_keras_compile=True,
+                                training_dataset_cache=True)
   flags_core.define_image()
   flags_core.define_benchmark()
   flags_core.define_distribution()
@@ -327,8 +328,8 @@ def define_keras_flags(dynamic_loss_scale=True):
   flags.DEFINE_integer(
       name='train_steps', default=None,
       help='The number of steps to run for training. If it is larger than '
-      '# batches per epoch, then use # batches per epoch. When this flag is '
-      'set, only one epoch is going to run for training.')
+      '# batches per epoch, then use # batches per epoch. This flag will be '
+      'ignored if train_epochs is set to be larger than 1. ')
   flags.DEFINE_string(
       name='profile_steps', default=None,
       help='Save profiling data to model dir at given range of steps. The '
@@ -353,6 +354,13 @@ def define_keras_flags(dynamic_loss_scale=True):
   flags.DEFINE_boolean(
       name='enable_checkpoint_and_export', default=False,
       help='Whether to enable a checkpoint callback and export the savedmodel.')
+  flags.DEFINE_string(
+      name='tpu', default='', help='TPU address to connect to.')
+  flags.DEFINE_integer(
+      name='steps_per_loop', default=1,
+      help='Number of steps per graph-mode loop. Only training step happens '
+      'inside the loop. Callbacks will not be called inside. Will be capped at '
+      'steps per epoch.')
 
 
 def get_synth_input_fn(height, width, num_channels, num_classes,

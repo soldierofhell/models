@@ -171,6 +171,11 @@ class TransformerTask(object):
           "mixed_float16", loss_scale=loss_scale)
       tf.compat.v2.keras.mixed_precision.experimental.set_policy(policy)
 
+    if params["dtype"] == tf.bfloat16:
+      policy = tf.compat.v2.keras.mixed_precision.experimental.Policy(
+          "mixed_bfloat16")
+      tf.compat.v2.keras.mixed_precision.experimental.set_policy(policy)
+
     self.distribution_strategy = distribution_utils.get_distribution_strategy(
         distribution_strategy=flags_obj.distribution_strategy,
         num_gpus=num_gpus,
@@ -444,22 +449,14 @@ def main(_):
   with logger.benchmark_context(flags_obj):
     task = TransformerTask(flags_obj)
 
-    def _run_task(task):
-      if flags_obj.mode == "train":
-        task.train()
-      elif flags_obj.mode == "predict":
-        task.predict()
-      elif flags_obj.mode == "eval":
-        task.eval()
-      else:
-        raise ValueError("Invalid mode {}".format(flags_obj.mode))
-
-    if flags_obj.distribution_strategy != "tpu":
-      _run_task(task)
+    if flags_obj.mode == "train":
+      task.train()
+    elif flags_obj.mode == "predict":
+      task.predict()
+    elif flags_obj.mode == "eval":
+      task.eval()
     else:
-      primary_cpu_task = "/job:worker" if flags_obj.use_tpu_2vm_config else ""
-      with tf.device(primary_cpu_task):
-        _run_task(task)
+      raise ValueError("Invalid mode {}".format(flags_obj.mode))
 
 
 if __name__ == "__main__":
