@@ -48,7 +48,9 @@ NUM_IMAGES = {
     'validation': 50000,
 }
 
-_NUM_TRAIN_FILES = 1024
+_NUM_TRAIN_FILES = 8 # 1024
+_NUM_VAL_FILES = 2 # 128
+
 _SHUFFLE_BUFFER = 10000
 
 _R_MEAN = 123.68
@@ -135,12 +137,12 @@ def get_filenames(is_training, data_dir):
   """Return filenames for dataset."""
   if is_training:
     return [
-        os.path.join(data_dir, 'train-%05d-of-01024' % i)
+        os.path.join(data_dir, 'train-%05d-of-%05d' % (i, _NUM_TRAIN_FILES))
         for i in range(_NUM_TRAIN_FILES)]
   else:
     return [
-        os.path.join(data_dir, 'validation-%05d-of-00128' % i)
-        for i in range(128)]
+        os.path.join(data_dir, 'validation-%05d-of-%05d' % (i, _NUM_VAL_FILES))
+        for i in range(_NUM_VAL_FILES)]
 
 
 def _parse_example_proto(example_serialized):
