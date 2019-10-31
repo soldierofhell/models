@@ -211,8 +211,6 @@ def _parse_example_proto(example_serialized):
   # [1, num_boxes, coords].
   bbox = tf.expand_dims(bbox, 0)
   bbox = tf.transpose(a=bbox, perm=[0, 2, 1])
-    
-  print(label)
 
   return features['image/encoded'], label, bbox
 
