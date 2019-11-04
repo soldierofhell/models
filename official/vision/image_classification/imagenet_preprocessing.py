@@ -53,6 +53,7 @@ _NUM_VAL_FILES = 2 # 128
 
 _SHUFFLE_BUFFER = 10000
 
+# Caffe-type preprocessing
 _R_MEAN = 123.68
 _G_MEAN = 116.78
 _B_MEAN = 103.94
