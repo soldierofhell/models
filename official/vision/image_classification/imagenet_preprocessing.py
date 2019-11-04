@@ -535,4 +535,5 @@ def preprocess_image(image_buffer, bbox, output_height, output_width,
 
   image.set_shape([output_height, output_width, num_channels])
 
-  return _mean_image_subtraction(image, CHANNEL_MEANS, num_channels)
+  return tf.keras.applications.resnet_v2.preprocess_input(image)
+  #return _mean_image_subtraction(image, CHANNEL_MEANS, num_channels)
