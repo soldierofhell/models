@@ -168,8 +168,13 @@ def run(flags_obj):
       model = trivial_model.trivial_model(
           imagenet_preprocessing.NUM_CLASSES)
     else:
-      model = resnet_model.resnet50(
-          num_classes=imagenet_preprocessing.NUM_CLASSES)
+      features = tf.keras.applications.ResNet50V2(include_top=False, weights='imagenet', input_shape=(224,224,3))
+      x = tf.keras.layers.Dense(imagenet_preprocessing.NUM_CLASSES, name='fc1000')(features.output)
+      x = tf.keras.layers.Activation('softmax', dtype='float32')(x)
+      model = tf.keras.models.Model(features.input, x, name='resnet50')
+
+      #model = resnet_model.resnet50(
+      #    num_classes=imagenet_preprocessing.NUM_CLASSES)
 
     # TODO(b/138957587): Remove when force_v2_in_keras_compile is on longer
     # a valid arg for this model. Also remove as a valid flag.
