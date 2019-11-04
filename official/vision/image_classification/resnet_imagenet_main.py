@@ -169,6 +169,7 @@ def run(flags_obj):
           imagenet_preprocessing.NUM_CLASSES)
     else:
       print('data format: ', tf.keras.backend.image_data_format())
+      print('num_classes: ', imagenet_preprocessing.NUM_CLASSES)
       features = tf.keras.applications.ResNet50V2(include_top=False, weights='imagenet') # , input_shape=(224,224,3)
       x = tf.keras.layers.Dense(imagenet_preprocessing.NUM_CLASSES, name='fc1000')(features.output)
       x = tf.keras.layers.Activation('softmax', dtype='float32')(x)
