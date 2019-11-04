@@ -174,6 +174,8 @@ def run(flags_obj):
       x = tf.keras.layers.Dense(imagenet_preprocessing.NUM_CLASSES, name='fc1000')(features.output)
       x = tf.keras.layers.Activation('softmax', dtype='float32')(x)
       model = tf.keras.models.Model(features.input, x, name='resnet50')
+      
+      model.summary()
 
       #model = resnet_model.resnet50(
       #    num_classes=imagenet_preprocessing.NUM_CLASSES)
