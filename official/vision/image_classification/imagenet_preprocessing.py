@@ -370,7 +370,7 @@ def _decode_crop_and_flip(image_buffer, bbox, num_channels):
       image_buffer, crop_window, channels=num_channels)
 
   # Flip to add a little more random distortion in.
-  cropped = tf.image.random_flip_left_right(cropped)
+  #cropped = tf.image.random_flip_left_right(cropped)
   return cropped
 
 
