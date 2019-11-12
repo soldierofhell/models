@@ -35,7 +35,7 @@ import hashlib
 import io
 import json
 import os
-from absl import app
+#from absl import app
 from absl import flags
 import contextlib2
 import numpy as np
