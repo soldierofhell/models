@@ -295,6 +295,8 @@ class YOLOV3Anchor(object):
   """Anchor class for anchor-based object detectors."""
 
   def __init__(self,
+               min_level,
+               max_level,
                anchors,
                anchor_masks,
                image_size):
@@ -306,6 +308,8 @@ class YOLOV3Anchor(object):
         [height, width] of the input image size.The image_size should be divided
         by the largest feature stride 2^max_level.
     """
+    self.min_level = min_level
+    self.max_level = max_level
     self.anchors = anchors
     self.anchor_masks = anchor_masks
     self.image_size = image_size
@@ -319,21 +323,23 @@ class YOLOV3Anchor(object):
       concatenated together.
     """
     boxes_all = []
-    for level in range(len(anchor_masks)):
+    for level in range(self.min_level, self.max_level + 1):
       boxes_l = []
-      stride = 2 ** level
-      half_anchor_size_x = base_anchor_size * aspect_x / 2.0
-      half_anchor_size_y = base_anchor_size * aspect_y / 2.0
-      x = tf.range(stride / 2, self.image_size[1], stride)
-      y = tf.range(stride / 2, self.image_size[0], stride)
-      xv, yv = tf.meshgrid(x, y)
-      xv = tf.cast(tf.reshape(xv, [-1]), dtype=tf.float32)
-      yv = tf.cast(tf.reshape(yv, [-1]), dtype=tf.float32)
-      # Tensor shape Nx4.
-      boxes = tf.stack([yv - half_anchor_size_y, xv - half_anchor_size_x,
-                        yv + half_anchor_size_y, xv + half_anchor_size_x],
-                       axis=1)
-      boxes_l.append(boxes)
+      for anchor_size in anchors[self.anchor_masks[level-2]]:
+        stride = 2 ** level
+        half_anchor_size_x = anchor_size / 2.0
+        half_anchor_size_y = anchor_size / 2.0
+        x = tf.range(stride / 2, self.image_size[1], stride)
+        y = tf.range(stride / 2, self.image_size[0], stride)
+        xv, yv = tf.meshgrid(x, y)
+        xv = tf.cast(tf.reshape(xv, [-1]), dtype=tf.float32)
+        yv = tf.cast(tf.reshape(yv, [-1]), dtype=tf.float32)
+        # Tensor shape Nx4.
+        boxes = tf.stack([yv - half_anchor_size_y, xv - half_anchor_size_x,
+                          yv + half_anchor_size_y, xv + half_anchor_size_x],
+                         axis=1)
+        boxes_l.append(boxes)
+        
       # Concat anchors on the same level to tensor shape NxAx4.
       boxes_l = tf.stack(boxes_l, axis=1)
       boxes_l = tf.reshape(boxes_l, [-1, 4])
