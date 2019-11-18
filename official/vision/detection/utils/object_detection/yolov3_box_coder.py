@@ -13,10 +13,10 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Faster RCNN box coder.
-Faster RCNN box coder follows the coding schema described below:
-  ty = (y - ya) / ha
-  tx = (x - xa) / wa
+"""YOLOv3 box coder.
+YOLOv3 box coder follows the coding schema described below:
+  ty = logit(y - ya)
+  tx = logit(x - xa)
   th = log(h / ha)
   tw = log(w / wa)
   where x, y, w, h denote the box's center coordinates, width and height
@@ -33,6 +33,9 @@ from official.vision.detection.utils.object_detection import box_list
 
 EPSILON = 1e-8
 
+def logit(x):
+    """ Computes the logit function, i.e. the logistic sigmoid inverse. """
+    return - tf.log(1. / x - 1.)
 
 class FasterRcnnBoxCoder(box_coder.BoxCoder):
   """Faster RCNN box coder."""
@@ -72,8 +75,8 @@ class FasterRcnnBoxCoder(box_coder.BoxCoder):
     h += EPSILON
     w += EPSILON
 
-    tx = (xcenter - xcenter_a) / wa
-    ty = (ycenter - ycenter_a) / ha
+    tx = logit(xcenter - xcenter_a)
+    ty = logit(ycenter - ycenter_a)
     tw = tf.math.log(w / wa)
     th = tf.math.log(h / ha)
     # Scales location targets as used in paper for joint training.
@@ -102,8 +105,8 @@ class FasterRcnnBoxCoder(box_coder.BoxCoder):
       tw /= self._scale_factors[3]
     w = tf.exp(tw) * wa
     h = tf.exp(th) * ha
-    ycenter = ty * ha + ycenter_a
-    xcenter = tx * wa + xcenter_a
+    ycenter = tf.sigmoid(ty) + ycenter_a
+    xcenter = tf.sigmoid(tx) + xcenter_a
     ymin = ycenter - h / 2.
     xmin = xcenter - w / 2.
     ymax = ycenter + h / 2.
