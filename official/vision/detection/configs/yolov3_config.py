@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Config template to train Retinanet."""
+"""Config template to train YOLOV3."""
 
 # pylint: disable=line-too-long
 
@@ -28,9 +28,9 @@ RESNET50_FROZEN_VAR_PREFIX = r'(resnet\d+/)conv2d(|_([1-9]|10))\/'
 
 # pylint: disable=line-too-long
 RETINANET_CFG = {
-    'type': 'retinanet',
+    'type': 'yolov3',
     'model_dir': '',
-    'use_tpu': True,
+    'use_tpu': False,
     'train': {
         'batch_size': 64,
         'iterations_per_loop': 500,
@@ -70,19 +70,15 @@ RETINANET_CFG = {
         'predict_batch_size': 8,
     },
     'architecture': {
-        'parser': 'retinanet_parser',
-        'backbone': 'resnet',
-        'multilevel_features': 'fpn',
+        'parser': 'yolov3_parser',
+        'backbone': 'darknet',
         'use_bfloat16': False,
     },
     'anchor': {
-        'min_level': 3,
-        'max_level': 7,
-        'num_scales': 3,
         'aspect_ratios': [1.0, 2.0, 0.5],
         'anchor_size': 4.0,
     },
-    'retinanet_parser': {
+    'yolov3_parser': {
         'use_bfloat16': False,
         'output_size': [640, 640],
         'num_channels': 3,
@@ -96,7 +92,7 @@ RETINANET_CFG = {
         'skip_crowd_during_training': True,
         'max_num_instances': 100,
     },
-    'resnet': {
+    'darknet': {
         'resnet_depth': 50,
         'dropblock': {
             'dropblock_keep_prob': None,
@@ -108,34 +104,7 @@ RETINANET_CFG = {
             'batch_norm_trainable': True,
         },
     },
-    'fpn': {
-        'min_level': 3,
-        'max_level': 7,
-        'fpn_feat_dims': 256,
-        'use_separable_conv': False,
-        'batch_norm': {
-            'batch_norm_momentum': 0.997,
-            'batch_norm_epsilon': 1e-4,
-            'batch_norm_trainable': True,
-        },
-    },
-    'nasfpn': {
-        'min_level': 3,
-        'max_level': 7,
-        'fpn_feat_dims': 256,
-        'num_repeats': 5,
-        'use_separable_conv': False,
-        'dropblock': {
-            'dropblock_keep_prob': None,
-            'dropblock_size': None,
-        },
-        'batch_norm': {
-            'batch_norm_momentum': 0.997,
-            'batch_norm_epsilon': 1e-4,
-            'batch_norm_trainable': True,
-        },
-    },
-    'retinanet_head': {
+    'yolov3_head': {
         'min_level': 3,
         'max_level': 7,
         # Note that `num_classes` is the total number of classes including
@@ -151,7 +120,7 @@ RETINANET_CFG = {
             'batch_norm_trainable': True,
         },
     },
-    'retinanet_loss': {
+    'yolov3_loss': {
         'num_classes': 91,
         'focal_loss_alpha': 0.25,
         'focal_loss_gamma': 1.5,
