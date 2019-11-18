@@ -37,7 +37,7 @@ def logit(x):
     """ Computes the logit function, i.e. the logistic sigmoid inverse. """
     return - tf.log(1. / x - 1.)
 
-class FasterRcnnBoxCoder(box_coder.BoxCoder):
+class YOLOV3BoxCoder(box_coder.BoxCoder):
   """Faster RCNN box coder."""
 
   def __init__(self, scale_factors=None):
