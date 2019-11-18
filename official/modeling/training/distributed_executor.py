@@ -22,6 +22,7 @@ from __future__ import print_function
 import json
 import os
 
+import numpy as np
 from absl import flags
 from absl import logging
 import tensorflow as tf
@@ -426,14 +427,16 @@ class DistributedExecutor(object):
       if not custom_callbacks:
         return
       for callback in custom_callbacks:
-        callback.on_batch_begin(batch)
+        if callback:
+          callback.on_batch_begin(batch)
 
     def _run_callbacks_on_batch_end(batch):
       """Runs custom callbacks at the end of every step."""
       if not custom_callbacks:
         return
       for callback in custom_callbacks:
-        callback.on_batch_end(batch)
+        if callback:
+          callback.on_batch_end(batch)
 
     if save_config:
       self._save_config(model_dir)
@@ -510,6 +513,8 @@ class DistributedExecutor(object):
                                          train_loss)
       if not isinstance(train_loss, dict):
         train_loss = {'total_loss': train_loss}
+      if np.isnan(train_loss['total_loss']):
+        raise ValueError('total loss is NaN.')
 
       if train_metric:
         train_metric_result = train_metric.result()
@@ -776,7 +781,7 @@ class ExecutorBuilder(object):
     """Builds tf.distribute.Strategy instance.
 
     Args:
-      strategy_type: string. One of 'tpu', 'mirrored', 'multi_worker_mirrored'.
+      strategy_type: string. One of 'tpu', 'one_device_gpu', 'mirrored', 'multi_worker_mirrored'.
 
     Returns:
       An tf.distribute.Strategy object. Returns None if strategy_type is None.
@@ -786,6 +791,8 @@ class ExecutorBuilder(object):
 
     if strategy_type == 'tpu':
       return self._build_tpu_strategy()
+    elif strategy_type == 'one_device_gpu':
+      return tf.distribute.OneDeviceStrategy("device:GPU:0")
     elif strategy_type == 'mirrored':
       return self._build_mirrored_strategy()
     elif strategy_type == 'multi_worker_mirrored':

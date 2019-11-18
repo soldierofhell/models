@@ -13,7 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """XLNet training utils."""
-
 from __future__ import absolute_import
 from __future__ import division
 # from __future__ import google_type_annotations
@@ -27,10 +26,11 @@ from absl import logging
 # pytype: disable=attribute-error
 # pylint: disable=g-bare-generic,unused-import
 import tensorflow as tf
+from typing import Any, Callable, Dict, Text, Optional
+
 from official.modeling import model_training_utils
 from official.nlp.xlnet import data_utils
-from official.nlp import xlnet_modeling as modeling
-from typing import Any, Callable, Dict, Text, Optional
+from official.nlp.xlnet import xlnet_modeling as modeling
 
 _MIN_SUMMARY_STEPS = 10
 
@@ -110,9 +110,7 @@ def train(
                      "`learning_rate_fn` are required parameters.")
   if not model_dir:
     raise TypeError("Model directory must be specified.")
-  # pylint: disable=protected-access
-  train_iterator = data_utils._get_input_iterator(train_input_fn, strategy)
-  # pylint: enable=protected-access
+  train_iterator = data_utils.get_input_iterator(train_input_fn, strategy)
   if not tf.io.gfile.exists(model_dir):
     tf.io.gfile.mkdir(model_dir)
   # Create summary writers

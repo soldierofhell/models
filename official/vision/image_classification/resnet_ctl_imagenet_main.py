@@ -188,7 +188,11 @@ def run(flags_obj):
       enable_xla=flags_obj.enable_xla)
 
   dtype = flags_core.get_tf_dtype(flags_obj)
-  if dtype == tf.bfloat16:
+  if dtype == tf.float16:
+    policy = tf.compat.v2.keras.mixed_precision.experimental.Policy(
+        'mixed_float16')
+    tf.compat.v2.keras.mixed_precision.experimental.set_policy(policy)
+  elif dtype == tf.bfloat16:
     policy = tf.compat.v2.keras.mixed_precision.experimental.Policy(
         'mixed_bfloat16')
     tf.compat.v2.keras.mixed_precision.experimental.set_policy(policy)
@@ -235,7 +239,13 @@ def run(flags_obj):
         compute_lr_on_cpu=True)
     optimizer = common.get_optimizer(lr_schedule)
 
-    if flags_obj.fp16_implementation == 'graph_rewrite':
+    if dtype == tf.float16:
+      loss_scale = flags_core.get_loss_scale(flags_obj, default_for_fp16=128)
+      optimizer = tf.keras.mixed_precision.experimental.LossScaleOptimizer(
+          optimizer, loss_scale)
+    elif flags_obj.fp16_implementation == 'graph_rewrite':
+      # `dtype` is still float32 in this case. We built the graph in float32 and
+      # let the graph rewrite change parts of it float16.
       if not flags_obj.use_tf_function:
         raise ValueError('--fp16_implementation=graph_rewrite requires '
                          '--use_tf_function to be true')
@@ -321,6 +331,11 @@ def run(flags_obj):
       train_single_step = tf.function(train_single_step)
       test_step = tf.function(test_step)
 
+    if flags_obj.enable_tensorboard:
+      summary_writer = tf.summary.create_file_writer(flags_obj.model_dir)
+    else:
+      summary_writer = None
+
     train_iter = iter(train_ds)
     time_callback.on_train_begin()
     for epoch in range(train_epochs):
@@ -361,7 +376,19 @@ def run(flags_obj):
                      test_accuracy.result().numpy(),
                      epoch + 1)
 
+      if summary_writer:
+        current_steps = steps_in_current_epoch + (epoch * per_epoch_steps)
+        with summary_writer.as_default():
+          tf.summary.scalar('train_loss', train_loss.result(), current_steps)
+          tf.summary.scalar(
+              'train_accuracy', training_accuracy.result(), current_steps)
+          tf.summary.scalar('eval_loss', test_loss.result(), current_steps)
+          tf.summary.scalar(
+              'eval_accuracy', test_accuracy.result(), current_steps)
+
     time_callback.on_train_end()
+    if summary_writer:
+      summary_writer.close()
 
     eval_result = None
     train_result = None
